@@ -10,7 +10,27 @@ public struct FunctionMetrics: Identifiable, Hashable, Sendable {
     public let cognitive: Int
     public let parameters: Int
     public let maxNesting: Int
+    /// Метод класса (JS/TS: method_definition и функции-свойства; Go: method_declaration).
+    public var isMethod = false
+    /// Go: имя типа-получателя метода.
+    public var owner: String? = nil
     public var length: Int { endLine - startLine + 1 }
+}
+
+public enum ClassKind: String, Sendable { case classType, abstractClass, structType }
+
+/// Класс (JS/TS) или структура с методами (Go).
+public struct ClassMetrics: Identifiable, Hashable, Sendable {
+    public var id: String { "\(name)@\(startLine)" }
+    public let name: String
+    public let kind: ClassKind
+    public let startLine: Int
+    public let endLine: Int
+    public let methodCount: Int
+    /// Weighted Methods per Class: сумма цикломатической сложности методов.
+    public let wmc: Int
+    /// Coupling Between Objects (приближённо): число разных импортированных имён, используемых внутри класса.
+    public let cbo: Int
 }
 
 /// Метрики одного файла. Производные значения считаются один раз при создании (удобно для сортировки больших таблиц).
@@ -24,6 +44,12 @@ public struct FileMetrics: Identifiable, Hashable, Sendable {
     public let blankLines: Int
     public let functions: [FunctionMetrics]
     public let parseErrors: Bool
+    /// Уникальные спецификаторы импортов (`./x`, `@nestjs/common`, Go-пути).
+    public let imports: [String]
+    public let classes: [ClassMetrics]
+    /// Интерфейсы и абстрактные классы / конкретные классы и структуры (для метрики A).
+    public let abstractTypes: Int
+    public let concreteTypes: Int
 
     public let functionCount: Int
     public let maxCyclomatic: Int
@@ -38,7 +64,9 @@ public struct FileMetrics: Identifiable, Hashable, Sendable {
     public var coverage: Double = -1
 
     public init(path: String, language: String, totalLines: Int, codeLines: Int, commentLines: Int,
-                blankLines: Int, functions: [FunctionMetrics], parseErrors: Bool) {
+                blankLines: Int, functions: [FunctionMetrics], parseErrors: Bool,
+                imports: [String] = [], classes: [ClassMetrics] = [], abstractTypes: Int = 0, concreteTypes: Int = 0) {
+        self.imports = imports; self.classes = classes; self.abstractTypes = abstractTypes; self.concreteTypes = concreteTypes
         self.path = path; self.language = language; self.totalLines = totalLines
         self.codeLines = codeLines; self.commentLines = commentLines; self.blankLines = blankLines
         self.functions = functions; self.parseErrors = parseErrors

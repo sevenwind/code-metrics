@@ -6,6 +6,7 @@ enum NavSection: String, CaseIterable, Identifiable {
     case overview = "Обзор"
     case files = "Файлы"
     case functions = "Функции"
+    case architecture = "Архитектура"
     case folders = "Папки"
     var id: String { rawValue }
     var title: String { tr(rawValue) }
@@ -14,6 +15,7 @@ enum NavSection: String, CaseIterable, Identifiable {
         case .overview: "chart.pie"
         case .files: "doc.text"
         case .functions: "function"
+        case .architecture: "building.columns"
         case .folders: "folder.badge.gearshape"
         }
     }
@@ -37,9 +39,25 @@ enum Severity {
     static func cyclomatic(_ v: Int) -> Severity { v > 20 ? .bad : v > 10 ? .warn : .good }
     static func cognitive(_ v: Int) -> Severity { v > 25 ? .bad : v > 15 ? .warn : .good }
     static func length(_ v: Int) -> Severity { v > 100 ? .bad : v > 50 ? .warn : .good }
+    static func wmc(_ v: Int) -> Severity { v > 50 ? .bad : v > 20 ? .warn : .good }
+    static func cbo(_ v: Int) -> Severity { v > 14 ? .bad : v > 9 ? .warn : .good }
     static func coverage(_ v: Double) -> Severity { v < 0.5 ? .bad : v < 0.8 ? .warn : .good }
     static func maintainability(_ v: Double) -> Severity { v < 20 ? .bad : v < 40 ? .warn : .good }
 }
+
+/// Строка таблицы классов (WMC/CBO).
+struct ClassRow: Identifiable, Hashable {
+    let id: String
+    let file: String
+    let cls: ClassMetrics
+    var name: String { cls.name }
+    var line: Int { cls.startLine }
+    var methods: Int { cls.methodCount }
+    var wmc: Int { cls.wmc }
+    var cbo: Int { cls.cbo }
+}
+
+enum ArchTab: String { case packages, classes }
 
 struct FunctionRow: Identifiable, Hashable {
     let id: String
@@ -82,6 +100,11 @@ final class AppModel {
     var functionsSelection: FunctionRow.ID?
     var minCC = 1
     var infoShown: Metric?
+    var packages: [PackageMetrics] = []
+    var classRows: [ClassRow] = []
+    var archTab: ArchTab = .packages
+    var packagesSort = [KeyPathComparator(\PackageMetrics.sortD, order: .reverse)]
+    var classesSort = [KeyPathComparator(\ClassRow.wmc, order: .reverse)]
     var errorDetailShown = false
     var coverage: CoverageReport?
     var coverageNote = ""
@@ -163,6 +186,10 @@ final class AppModel {
             self.report = result
             self.functionRows = result.files.flatMap { f in
                 f.functions.map { FunctionRow(id: "\(f.path)#\($0.id)", file: f.path, language: f.language, fn: $0) }
+            }
+            self.packages = ArchitectureAnalyzer.analyze(report: result)
+            self.classRows = result.files.flatMap { f in
+                f.classes.map { ClassRow(id: "\(f.path)#\($0.id)", file: f.path, cls: $0) }
             }
             self.isScanning = false
             self.loadCoverage()
@@ -351,6 +378,8 @@ final class AppModel {
         report = nil
         root = nil
         functionRows = []
+        packages = []
+        classRows = []
         coverage = nil
         coverageNote = ""
         coverageLog = ""
@@ -370,8 +399,8 @@ final class AppModel {
     func reveal(_ relative: String) {
         if let u = absoluteURL(relative) { NSWorkspace.shared.activateFileViewerSelecting([u]) }
     }
-    func openFile(_ relative: String) {
-        if let u = absoluteURL(relative) { EditorSettings.shared.open(u) }
+    func openFile(_ relative: String, line: Int? = nil) {
+        if let u = absoluteURL(relative) { EditorSettings.shared.open(u, line: line) }
     }
     func openProjectInEditor() {
         if let root { EditorSettings.shared.open(root) }

@@ -128,6 +128,85 @@ extension T {
 }
 try await T.sensitiveNeverRead()
 
+enum A {
+    static func classesAndImports() {
+        let src = """
+        import { Injectable } from '@nestjs/common';
+        import * as path from 'path';
+        import { Repo } from './repo';
+        const fs = require('fs');
+
+        export interface IFoo { run(): void }
+        export abstract class Base { abstract go(): void }
+        @Injectable()
+        export class Svc extends Base {
+          constructor(private repo: Repo) { super() }
+          go() { if (this.repo) { return path.join('a') } }
+          other(x: number) { return x > 1 ? fs.readFileSync('x') : 0 }
+          noRefs() { return 1 }
+        }
+        """
+        let m = T.analyze(src, .typescript, path: "src/a.ts")
+        check(Set(m.imports) == ["@nestjs/common", "path", "./repo", "fs"], "imports \(m.imports)")
+        check(m.abstractTypes == 2 && m.concreteTypes == 1, "types \(m.abstractTypes)/\(m.concreteTypes)")
+        let svc = m.classes.first { $0.name == "Svc" }
+        // constructor 1 + go (1 + if) 2 + other (1 + ternary) 2 + noRefs 1
+        check(svc?.wmc == 6, "wmc \(String(describing: svc?.wmc))")
+        check(svc?.methodCount == 4, "methods \(String(describing: svc?.methodCount))")
+        // Injectable, Repo, path, fs
+        check(svc?.cbo == 4, "cbo \(String(describing: svc?.cbo))")
+        check(m.classes.contains { $0.name == "Base" && $0.kind == .abstractClass })
+        check(!m.classes.contains { $0.name == "IFoo" })
+    }
+
+    static func goStructs() {
+        let src = """
+        package svc
+
+        import (
+            "fmt"
+            "net/http"
+            log "github.com/x/y/logger"
+            "github.com/x/y/store"
+        )
+
+        type Reader interface { Read() }
+        type Srv struct{ c http.Client }
+        func (s *Srv) A(x int) { if x > 0 { fmt.Println(store.Get()) } }
+        func (s Srv) B() { log.Info("b") }
+        func helper() {}
+        """
+        let m = T.analyze(src, .go, path: "svc/s.go")
+        check(Set(m.imports) == ["fmt", "net/http", "github.com/x/y/logger", "github.com/x/y/store"], "imports \(m.imports)")
+        check(m.abstractTypes == 1 && m.concreteTypes == 1)
+        let srv = m.classes.first { $0.name == "Srv" }
+        check(srv?.methodCount == 2 && srv?.wmc == 3, "srv \(String(describing: srv))")
+        check(srv?.cbo == 4, "cbo \(String(describing: srv?.cbo))")   // http, fmt, store, log
+    }
+
+    static func martinMetrics() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("arch-\(UUID().uuidString)")
+        let fm = FileManager.default
+        for d in ["core", "app", "util"] { try fm.createDirectory(at: dir.appendingPathComponent(d), withIntermediateDirectories: true) }
+        try "export interface Port { f(): void }\nexport abstract class Base {}\n".write(to: dir.appendingPathComponent("core/port.ts"), atomically: true, encoding: .utf8)
+        try "import { Port } from '../core/port';\nimport { h } from '../util';\nexport class Impl implements Port { f() {} }\n".write(to: dir.appendingPathComponent("app/impl.ts"), atomically: true, encoding: .utf8)
+        try "export function h() { return 1 }\n".write(to: dir.appendingPathComponent("util/index.ts"), atomically: true, encoding: .utf8)
+        try "import { Impl } from './impl';\nimport x from 'react';\nexport const y = Impl;\n".write(to: dir.appendingPathComponent("app/other.spec.ts"), atomically: true, encoding: .utf8)
+        let report = await ProjectScanner.scan(root: dir)
+        let pk = Dictionary(uniqueKeysWithValues: ArchitectureAnalyzer.analyze(report: report).map { ($0.path, $0) })
+        check(pk["core"]?.ca == 1 && pk["core"]?.ce == 0, "core \(String(describing: pk["core"]))")
+        check(pk["core"]?.instability == 0 && pk["core"]?.abstractness == 1, "core I/A")
+        check(pk["core"]?.distance == 0, "core D")
+        check(pk["app"]?.ca == 0 && pk["app"]?.ce == 2, "app \(String(describing: pk["app"]))")
+        check(pk["app"]?.instability == 1 && pk["app"]?.abstractness == 0 && pk["app"]?.distance == 0, "app")
+        check(pk["util"]?.ca == 1 && pk["util"]?.ce == 0, "util")
+        try? fm.removeItem(at: dir)
+    }
+}
+A.classesAndImports()
+A.goStructs()
+try await A.martinMetrics()
+
 T.typeScriptComplexityAndLines()
 T.go()
 T.nestedFunctionsAreSeparate()

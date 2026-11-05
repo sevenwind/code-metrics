@@ -49,15 +49,20 @@ struct FunctionsView: View {
                 TableColumn(tr("Парам."), value: \.parameters) { Text("\($0.parameters)").monospacedDigit() }.width(55)
                 TableColumn(tr("Вложен."), value: \.nesting) { Text("\($0.nesting)").monospacedDigit() }.width(60)
             }
+            .columnTooltips([
+                "CC": metricTip(.cc), "Cog": metricTip(.cog), tr("Длина"): metricTip(.length), "Cov": metricTip(.coverage),
+                "CRAP": metricTip(.crap), tr("Парам."): metricTip(.params), tr("Вложен."): metricTip(.nesting),
+            ])
             .contextMenu(forSelectionType: FunctionRow.ID.self) { ids in
                 if let r = model.functionRows.first(where: { $0.id == ids.first }) {
-                    Button(tr("Открыть файл")) { model.openFile(r.file) }
+                    Button(tr("Открыть функцию в %@", EditorSettings.shared.editor.name)) { model.openFile(r.file, line: r.line) }
+                    Button(tr("Открыть файл в %@", EditorSettings.shared.editor.name)) { model.openFile(r.file) }
                     Button(tr("Показать в Finder")) { model.reveal(r.file) }
                     Divider()
                     Button(tr("Исключить файл из анализа")) { model.exclude([r.file]) }
                 }
             } primaryAction: { ids in
-                if let r = model.functionRows.first(where: { $0.id == ids.first }) { model.openFile(r.file) }
+                if let r = model.functionRows.first(where: { $0.id == ids.first }) { model.openFile(r.file, line: r.line) }
             }
         }
     }

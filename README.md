@@ -11,6 +11,7 @@ Everything runs locally — your code never leaves the machine.
 - **Overview** — files, lines of code, comments, functions, maintainability, complex functions, test coverage and CRAP index at a glance, with color-graded cards and charts.
 - **Files / Functions tables** — sortable, filterable, with a row of "?" hints explaining every column; double-click opens the file in your editor.
 - **Folders** — directory tree with totals; exclude folders or files from the analysis (right-click). Dependencies and build artifacts (`node_modules`, `dist`, `vendor`, …) are skipped by default.
+- **Architecture** — Martin metrics per package with a main-sequence chart, plus WMC / CBO per class.
 - **Test coverage** — loads an existing report or runs the tests for you (play link on the *Test coverage* card).
 - **Open in editor** — VS Code by default; Cursor, Windsurf, Zed, Sublime Text, WebStorm, IntelliJ IDEA, Xcode or the system default can be chosen in Settings.
 - **English / Russian UI** — English by default, switch in Settings (⌘,).
@@ -26,6 +27,9 @@ Everything runs locally — your code never leaves the machine.
 | Length, parameters, nesting | Function size, parameter count, maximum nesting depth |
 | **MI** — maintainability index | 0–100, Visual Studio formula (lines of code stand in for Halstead volume). ≥ 40 good, 20–40 warning, < 20 bad |
 | **Cov** — line coverage | Share of lines executed by tests, per project / file / function |
+| **Ca / Ce / I / A / D** (Martin) | Per package (folder): afferent / efferent coupling, instability `Ce/(Ca+Ce)`, abstractness (interfaces + abstract classes / all types), distance from the main sequence `\|A+I−1\|`. Import graph is built from relative imports, `@/…`, `src/…` and Go module paths; test files are excluded |
+| **WMC** | Sum of CC of a class's methods (Go: methods of a struct). ≤ 20 normal, > 50 heavy |
+| **CBO** (approximate) | Distinct imported modules/types used inside a class — computed from imports, without type resolution. ≤ 9 normal, > 14 high |
 | **CRAP** | `CC² × (1 − coverage)³ + CC` — complex *and* poorly tested code. ≤ 5 safe, > 30 "crappy" |
 
 ## Test coverage

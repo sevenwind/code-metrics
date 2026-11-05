@@ -21,6 +21,7 @@ struct ContentView: View {
                     case .overview: OverviewView(report: report)
                     case .files: FilesView(report: report)
                     case .functions: FunctionsView()
+                    case .architecture: ArchitectureView()
                     case .folders: FoldersView(report: report)
                     }
                 }

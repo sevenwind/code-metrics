@@ -34,6 +34,23 @@ enum CodeEditor: String, CaseIterable, Identifiable {
         }
     }
 
+    /// URL для открытия файла на строке (nil — редактор не поддерживает переход по URL).
+    func lineURL(path: String, line: Int) -> URL? {
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove(charactersIn: "&?#")
+        let enc = path.addingPercentEncoding(withAllowedCharacters: allowed) ?? path
+        switch self {
+        case .vscode: return URL(string: "vscode://file\(enc):\(line)")
+        case .cursor: return URL(string: "cursor://file\(enc):\(line)")
+        case .windsurf: return URL(string: "windsurf://file\(enc):\(line)")
+        case .zed: return URL(string: "zed://file\(enc):\(line)")
+        case .webstorm: return URL(string: "webstorm://open?file=\(enc)&line=\(line)")
+        case .idea: return URL(string: "idea://open?file=\(enc)&line=\(line)")
+        case .xcode: return URL(string: "xcode://open?url=file://\(enc)&line=\(line)")
+        case .sublime, .system: return nil
+        }
+    }
+
     var appURL: URL? { bundleID.flatMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) } }
     var isInstalled: Bool { self == .system || appURL != nil }
 }
@@ -51,11 +68,22 @@ final class EditorSettings {
     }
 
     /// Открывает файл или папку в выбранном редакторе; если он не установлен — в приложении по умолчанию.
-    func open(_ url: URL) {
-        if let app = editor.appURL {
-            NSWorkspace.shared.open([url], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
-        } else {
-            NSWorkspace.shared.open(url)
+    /// `line` — перейти на строку (где редактор это умеет: URL-схемы VS Code/Cursor/Windsurf/Zed/JetBrains/Xcode, CLI Sublime).
+    func open(_ url: URL, line: Int? = nil) {
+        guard let app = editor.appURL else { NSWorkspace.shared.open(url); return }
+        if let line, let target = editor.lineURL(path: url.path, line: line) {
+            NSWorkspace.shared.open([target], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+            return
         }
+        if let line, editor == .sublime {
+            let subl = app.appendingPathComponent("Contents/SharedSupport/bin/subl")
+            if FileManager.default.isExecutableFile(atPath: subl.path) {
+                let p = Process()
+                p.executableURL = subl
+                p.arguments = ["\(url.path):\(line)"]
+                if (try? p.run()) != nil { return }
+            }
+        }
+        NSWorkspace.shared.open([url], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
     }
 }

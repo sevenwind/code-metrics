@@ -34,6 +34,7 @@ struct OverviewView: View {
                              tint: Severity.maintainability(report.avgMaintainability).color)
                     CoverageCard()
                     CrapStat()
+                    DistanceStat()
                     StatCard(title: tr("Сложных функций"), metric: .complexFunctions, value: format(model.functionRows.filter { $0.cyclomatic > 10 }.count),
                              subtitle: tr("цикломатика > 10"), icon: "exclamationmark.triangle",
                              tint: complexColor, valueColor: complexColor)
@@ -66,7 +67,7 @@ struct OverviewView: View {
                                 ForEach(Array(rows)) { r in
                                     HotspotRow(title: r.name, subtitle: "\(r.file):\(r.line)",
                                                value: String(format: "CC %d · %.0f%%", r.cyclomatic, r.coverage * 100),
-                                               color: Severity.coverage(r.coverage).color).onTapGesture(count: 2) { model.openFile(r.file) }
+                                               color: Severity.coverage(r.coverage).color).onTapGesture(count: 2) { model.openFile(r.file, line: r.line) }
                                 }
                             }
                         }
@@ -87,7 +88,7 @@ struct OverviewView: View {
                         VStack(spacing: 0) {
                             ForEach(model.functionRows.sorted { $0.cyclomatic > $1.cyclomatic }.prefix(8)) { r in
                                 HotspotRow(title: r.name, subtitle: "\(r.file):\(r.line)", value: "CC \(r.cyclomatic)",
-                                           color: Severity.cyclomatic(r.cyclomatic).color).onTapGesture(count: 2) { model.openFile(r.file) }
+                                           color: Severity.cyclomatic(r.cyclomatic).color).onTapGesture(count: 2) { model.openFile(r.file, line: r.line) }
                             }
                         }
                     }
@@ -146,6 +147,21 @@ private struct CrapStat: View {
                 .font(.caption2).foregroundStyle(.secondary)
                 .help(tr("Индекс CRAP считается по покрытию тестами: запустите тесты или выберите отчёт покрытия."))
         }
+    }
+}
+
+/// Средняя дистанция до главной последовательности (метрика D Роберта Мартина), взвешенная по числу файлов.
+private struct DistanceStat: View {
+    @Environment(AppModel.self) private var model
+    var body: some View {
+        let ps = model.packages.filter { $0.distance != nil }
+        let w = ps.reduce(0.0) { $0 + Double($1.files) }
+        let avg = w > 0 ? ps.reduce(0.0) { $0 + ($1.distance ?? 0) * Double($1.files) } / w : nil
+        let color = avg.map { badnessColor($0 / 0.6) }
+        StatCard(title: tr("Архитектура (D)"), metric: .distance,
+                 value: avg.map { String(format: "%.2f", $0) } ?? "—",
+                 subtitle: tr("пакетов: %ld", model.packages.count),
+                 icon: "building.columns", tint: color ?? .secondary, valueColor: color)
     }
 }
 

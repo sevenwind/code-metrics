@@ -54,9 +54,14 @@ struct FilesView: View {
                         .foregroundStyle(Severity.maintainability(f.maintainability).color)
                 }.width(50)
             }
+            .columnTooltips([
+                tr("Код"): metricTip(.loc), tr("Комм."): metricTip(.commentRatio), "Max CC": metricTip(.maxCC),
+                "Cov": metricTip(.coverage), tr("Функц."): metricTip(.functions), "Max Cog": metricTip(.maxCog),
+                "MI": metricTip(.maintainability), tr("Язык"): metricTip(.language),
+            ])
             .contextMenu(forSelectionType: FileMetrics.ID.self) { ids in
                 if let p = ids.first {
-                    Button(tr("Открыть")) { model.openFile(p) }
+                    Button(tr("Открыть в %@", EditorSettings.shared.editor.name)) { model.openFile(p) }
                     Button(tr("Показать в Finder")) { model.reveal(p) }
                     Divider()
                     Button(tr("Исключить из анализа")) { model.exclude(Array(ids)) }
@@ -95,6 +100,11 @@ private struct FileDetail: View {
                     }
                     Spacer()
                     Text("CC \(fn.cyclomatic)").monospacedDigit().bold().foregroundStyle(Severity.cyclomatic(fn.cyclomatic).color)
+                }
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) { model.openFile(file.path, line: fn.startLine) }
+                .contextMenu {
+                    Button(tr("Открыть функцию в %@", EditorSettings.shared.editor.name)) { model.openFile(file.path, line: fn.startLine) }
                 }
             }.listStyle(.plain)
         }.padding(12)

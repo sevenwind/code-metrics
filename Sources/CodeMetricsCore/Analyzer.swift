@@ -19,7 +19,9 @@ public struct FileAnalyzer {
         return FileMetrics(path: path, language: spec.name, totalLines: counts.total, codeLines: counts.code,
                            commentLines: counts.comment, blankLines: counts.blank,
                            functions: walker.functions.sorted { $0.startLine < $1.startLine },
-                           parseErrors: root.hasError)
+                           parseErrors: root.hasError,
+                           imports: walker.imports, classes: walker.classMetrics(),
+                           abstractTypes: walker.abstractTypeCount, concreteTypes: walker.concreteTypeCount)
     }
 
     static func countLines(units: [UInt16], comments: [NSRange]) -> (total: Int, code: Int, comment: Int, blank: Int) {
@@ -61,6 +63,17 @@ private final class Walker {
     var functions: [FunctionMetrics] = []
     private var typeCache: [Int: String] = [:]
 
+    // Архитектурные данные
+    var imports: [String] = []
+    private var importSet = Set<String>()
+    /// Локальное имя → спецификатор импорта.
+    private var bindings: [String: String] = [:]
+    private var refs: [(name: String, line: Int)] = []
+    private struct TypeDecl { let name: String; let kind: ClassKind?; let isAbstract: Bool; let start: Int; let end: Int }
+    private var types: [TypeDecl] = []
+    var abstractTypeCount: Int { types.filter(\.isAbstract).count }
+    var concreteTypeCount: Int { types.filter { !$0.isAbstract }.count }
+
     init(spec: LanguageSpec, source: NSString) {
         self.spec = spec
         self.source = source
@@ -79,18 +92,173 @@ private final class Walker {
         let type = typeName(node)
         if spec.commentNodes.contains(type) { comments.append(node.range); return }
 
+        if node.isNamed, collectStructure(node, type: type) { return }
+
         if node.isNamed && spec.functionNodes.contains(type) {
             let c = FnCtx()
             for i in 0..<node.childCount { if let ch = node.child(at: i) { walk(ch, ctx: c, nesting: 0) } }
             let pr = node.pointRange
             functions.append(FunctionMetrics(
                 name: functionName(node), startLine: Int(pr.lowerBound.row) + 1, endLine: Int(pr.upperBound.row) + 1,
-                cyclomatic: c.cyclomatic, cognitive: c.cognitive, parameters: parameterCount(node), maxNesting: c.maxNesting))
+                cyclomatic: c.cyclomatic, cognitive: c.cognitive, parameters: parameterCount(node), maxNesting: c.maxNesting,
+                isMethod: isMethod(node, type: type), owner: type == "method_declaration" ? receiverType(node) : nil))
             return
         }
         var nest = nesting
         if let ctx { apply(node, type: type, ctx: ctx, nesting: &nest) }
         for i in 0..<node.childCount { if let ch = node.child(at: i) { walk(ch, ctx: ctx, nesting: nest) } }
+    }
+
+    // MARK: Импорты, типы, ссылки
+
+    private func line(_ node: Node) -> Int { Int(node.pointRange.lowerBound.row) + 1 }
+
+    /// Диапазон строк объявления; для `@Decorator() export class` берётся диапазон export_statement, чтобы учесть декораторы.
+    private func declLines(_ node: Node) -> (Int, Int) {
+        var n = node
+        if let p = node.parent, typeName(p) == "export_statement" { n = p }
+        let pr = n.pointRange
+        return (Int(pr.lowerBound.row) + 1, Int(pr.upperBound.row) + 1)
+    }
+
+    private func addImport(_ specifier: String) {
+        if importSet.insert(specifier).inserted { imports.append(specifier) }
+    }
+
+    private func unquote(_ s: String) -> String {
+        guard s.count >= 2, let f = s.first, "\"'`".contains(f) else { return s }
+        return String(s.dropFirst().dropLast())
+    }
+
+    /// Имена, вводимые импортом (default, namespace, именованные с учётом `as`).
+    private func collectBindings(_ node: Node, into names: inout [String]) {
+        let t = typeName(node)
+        if t == "import_specifier" {
+            if let n = text(node.child(byFieldName: "alias") ?? node.child(byFieldName: "name")) { names.append(n) }
+            return
+        }
+        if t == "identifier" || t == "shorthand_property_identifier_pattern" { if let n = text(node) { names.append(n) }; return }
+        for i in 0..<node.childCount { if let ch = node.child(at: i) { collectBindings(ch, into: &names) } }
+    }
+
+    private func goPackageName(_ path: String) -> String {
+        var parts = path.split(separator: "/").map(String.init)
+        if let last = parts.last, last.range(of: "^v[0-9]+$", options: .regularExpression) != nil, parts.count > 1 { parts.removeLast() }
+        var name = parts.last ?? path
+        if let r = name.range(of: ".v[0-9]+$", options: .regularExpression) { name.removeSubrange(r) }
+        return name.replacingOccurrences(of: "-", with: "_")
+    }
+
+    /// Собирает импорты, объявления типов и ссылки на импортированные имена.
+    /// Возвращает true, если узел обработан полностью и спускаться в него не нужно.
+    private func collectStructure(_ node: Node, type: String) -> Bool {
+        switch type {
+        case "import_statement":      // JS/TS
+            if let src = text(node.child(byFieldName: "source")) {
+                let spec = unquote(src)
+                addImport(spec)
+                var names: [String] = []
+                for i in 0..<node.childCount {
+                    if let ch = node.child(at: i), typeName(ch) == "import_clause" { collectBindings(ch, into: &names) }
+                }
+                for n in names { bindings[n] = spec }
+            }
+            return true
+        case "export_statement":
+            if let src = text(node.child(byFieldName: "source")) { addImport(unquote(src)) }
+        case "call_expression":
+            let fn = node.child(byFieldName: "function")
+            if fn.map(typeName) == "import" || text(fn) == "require",
+               let args = node.child(byFieldName: "arguments"),
+               let first = args.namedChild(at: 0), typeName(first) == "string", let src = text(first) {
+                let spec = unquote(src)
+                addImport(spec)
+                if let p = node.parent, typeName(p) == "variable_declarator", let nameNode = p.child(byFieldName: "name") {
+                    var names: [String] = []
+                    collectBindings(nameNode, into: &names)
+                    for n in names { bindings[n] = spec }
+                }
+            }
+        case "import_spec":           // Go
+            if let p = text(node.child(byFieldName: "path")) {
+                let path = unquote(p)
+                addImport(path)
+                let alias = text(node.child(byFieldName: "name"))
+                if alias != "_" && alias != "." { bindings[alias ?? goPackageName(path)] = path }
+            }
+            return true
+        case "class_declaration", "class":
+            if let n = text(node.child(byFieldName: "name")) {
+                let (s, e) = declLines(node)
+                types.append(TypeDecl(name: n, kind: .classType, isAbstract: false, start: s, end: e))
+            }
+        case "abstract_class_declaration":
+            if let n = text(node.child(byFieldName: "name")) {
+                let (s, e) = declLines(node)
+                types.append(TypeDecl(name: n, kind: .abstractClass, isAbstract: true, start: s, end: e))
+            }
+        case "interface_declaration":
+            if let n = text(node.child(byFieldName: "name")) {
+                let pr = node.pointRange
+                types.append(TypeDecl(name: n, kind: nil, isAbstract: true, start: Int(pr.lowerBound.row) + 1, end: Int(pr.upperBound.row) + 1))
+            }
+        case "type_spec":             // Go
+            if let n = text(node.child(byFieldName: "name")), let t = node.child(byFieldName: "type") {
+                let pr = node.pointRange
+                let s = Int(pr.lowerBound.row) + 1, e = Int(pr.upperBound.row) + 1
+                switch typeName(t) {
+                case "struct_type": types.append(TypeDecl(name: n, kind: .structType, isAbstract: false, start: s, end: e))
+                case "interface_type": types.append(TypeDecl(name: n, kind: nil, isAbstract: true, start: s, end: e))
+                default: break
+                }
+            }
+        case "identifier", "type_identifier", "package_identifier":
+            if !bindings.isEmpty, let t = text(node), bindings[t] != nil { refs.append((t, line(node))) }
+        default: break
+        }
+        return false
+    }
+
+    private func isMethod(_ node: Node, type: String) -> Bool {
+        if type == "method_definition" || type == "method_declaration" { return true }
+        if let p = node.parent, ["public_field_definition", "field_definition"].contains(typeName(p)) { return true }
+        return false
+    }
+
+    private func receiverType(_ node: Node) -> String? {
+        func find(_ n: Node) -> String? {
+            if typeName(n) == "type_identifier" { return text(n) }
+            for i in 0..<n.childCount { if let c = n.child(at: i), let r = find(c) { return r } }
+            return nil
+        }
+        return node.child(byFieldName: "receiver").flatMap(find)
+    }
+
+    /// WMC и CBO по каждому классу/структуре файла.
+    func classMetrics() -> [ClassMetrics] {
+        let decls = types.filter { $0.kind != nil }
+        var out: [ClassMetrics] = []
+        for d in decls {
+            var methods: [FunctionMetrics]
+            var ranges = [d.start...max(d.start, d.end)]
+            if d.kind == .structType {
+                methods = functions.filter { $0.isMethod && $0.owner == d.name }
+                ranges += methods.map { $0.startLine...max($0.startLine, $0.endLine) }
+            } else {
+                methods = functions.filter { f in
+                    guard f.isMethod, f.startLine >= d.start, f.endLine <= d.end else { return false }
+                    // метод принадлежит самому вложенному из содержащих его классов
+                    let inner = decls.filter { $0.kind != .structType && $0.start <= f.startLine && f.endLine <= $0.end }
+                        .min { ($0.end - $0.start) < ($1.end - $1.start) }
+                    return inner?.start == d.start && inner?.name == d.name
+                }
+            }
+            var coupled = Set<String>()
+            for r in refs where ranges.contains(where: { $0.contains(r.line) }) { coupled.insert(r.name) }
+            out.append(ClassMetrics(name: d.name, kind: d.kind ?? .classType, startLine: d.start, endLine: d.end,
+                                    methodCount: methods.count, wmc: methods.reduce(0) { $0 + $1.cyclomatic }, cbo: coupled.count))
+        }
+        return out.sorted { $0.startLine < $1.startLine }
     }
 
     private func apply(_ node: Node, type: String, ctx: FnCtx, nesting: inout Int) {
